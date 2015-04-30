@@ -10,9 +10,9 @@ var MarketActions = {
 
     var branchId = branchState.currentBranch;
     var ethereumClient = configState.ethereumClient;
-    var markets = ethereumClient.getMarkets(branchId);
-
-    this.dispatch(constants.market.LOAD_MARKETS_SUCCESS, {markets: markets});
+    var markets = ethereumClient.getMarkets(branchId, (markets) => {
+      this.dispatch(constants.market.LOAD_MARKETS_SUCCESS, {markets: markets});
+    });
   }
 };
 

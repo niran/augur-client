@@ -20,7 +20,7 @@ var NetworkActions = {
     }
 
     if ((!networkState.ethereumStatus || networkState.ethereumStatus === constants.network.ETHEREUM_STATUS_CONNECTED) && !netUp) {
- 
+
       // we lost our connection
 
       // shutdown all network filters

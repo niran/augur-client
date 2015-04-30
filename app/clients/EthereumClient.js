@@ -14,6 +14,20 @@ function MissingContractError(contractName) {
 }
 
 /**
+ * Make a callback that accepts error and result, and uses those
+ * values to call Promise callbacks.
+ */
+var makeErrorHandler = function (resolve, reject) {
+  return function (error, result) {
+    if (error) {
+      reject(error);
+    } else {
+      resolve(result);
+    }
+  };
+};
+
+/**
  * Augur is implemented as several Ethereum contracts, mainly due to size
  * limitations. EthereumClient wraps the calls to those contracts to abstract
  * the contract details from the rest of the codebase.
@@ -182,76 +196,99 @@ EthereumClient.prototype.getBranches = function () {
  * @returns {BigNumber} object.$id.author - The account hash of the market
  *   creator. Convert to hexadecimal for display purposes.
  */
-EthereumClient.prototype.getMarkets = function (branchId) {
+EthereumClient.prototype.getMarkets = function (branchId, callback) {
 
   var branchContract = this.getContract('branches');
   var marketContract = this.getContract('markets');
   var infoContract = this.getContract('info');
   var account = this.account;
 
-  var validMarkets = _.filter(branchContract.getMarkets.call(branchId), function(marketId) {
-    var events = marketContract.getMarketEvents.call(marketId);
-    return events.length ? true : false;
-  });
-
-  var marketList = _.map(validMarkets, function(marketId) {
-
-    var events = marketContract.getMarketEvents.call(marketId);
-    var description = infoContract.getDescription.call(marketId);
-    var alpha = fromFixedPoint(marketContract.getAlpha.call(marketId));
-    var author = infoContract.getCreator.call(marketId);
-    var creationFee = infoContract.getCreationFee.call(marketId);
-
-    var endDate = new Date();   // TODO: calc from last event expiration
-    var traderCount = marketContract.getCurrentParticipantNumber.call(marketId);
-    var tradingPeriod = marketContract.getTradingPeriod.call(marketId);
-    var tradingFee = marketContract.getTradingFee.call(marketId);
-    var traderId =  marketContract.getParticipantNumber.call(marketId, account);
-    var totalVolume = 0;
-
-    var outcomeCount = marketContract.getMarketNumOutcomes.call(marketId).toNumber();
-    var outcomes = _.map( _.range(1, outcomeCount + 1), function (outcomeId) {
-
-      var volume = marketContract.getSharesPurchased.call(marketId, outcomeId);
-      //console.log(volume.toNumber());
-
-      //totalVolume += volume;
-
-      return {
-        id: outcomeId,
-        price: fromFixedPoint(marketContract.price.call(marketId, outcomeId)),
-        //sellPrice: marketContract.getSimulatedSell.call(marketId, id).toNumber(),
-        //buyPrice: marketContract.getSimulatedBuy.call(marketId, id).toNumber(),
-        priceHistory: [],  // NEED
-        sharesPurchased: fromFixedPoint(marketContract.getParticipantSharesPurchased.call(marketId, traderId, outcomeId)),
-        volume: volume
-      };
+  new Promise(function (resolve, reject) {
+    // Get all the markets in the given branch.
+    branchContract.getMarkets.call(branchId, makeErrorHandler(resolve, reject));
+  }).then(function (markets) {
+    // Exclude markets without events.
+    var validMarketPromises = _.map(markets, function(marketId) {
+      return new Promise(function (resolve, reject) {
+        console.log('Getting events for market '+ marketId);
+        marketContract.getMarketEvents.call(marketId, makeErrorHandler(resolve, reject));
+      }).then(function (events) {
+        if (events.length) {
+          console.log('Market '+ marketId + ' is valid');
+          return marketId;
+        }
+      });
     });
 
-    var price = outcomes.length ? outcomes[0].price : '-';
-    var winningOutcomes = marketContract.getWinningOutcomes.call(marketId);
+    var marketDataPromises = _.map(validMarketPromises, function (promise) {
+      return promise.then(function (marketId) {
+        if (marketId == null) {
+          return;
+        }
 
-    return {
-      id: marketId,
-      price: price,  // HACK
-      description: description,
-      alpha: alpha,
-      author: author,
-      endDate: endDate,
-      traderCount: traderCount,
-      tradingPeriod: tradingPeriod,
-      tradingFee: tradingFee,
-      traderId: traderId,
-      totalVolume: totalVolume,
-      events: events,
-      outcomes: outcomes,
-      comments: []
-    };
+        console.log('Getting data for market ' + marketId);
+
+        var events = marketContract.getMarketEvents.call(marketId);
+        var description = infoContract.getDescription.call(marketId);
+        var alpha = fromFixedPoint(marketContract.getAlpha.call(marketId));
+        var author = infoContract.getCreator.call(marketId);
+        var creationFee = infoContract.getCreationFee.call(marketId);
+
+        var endDate = new Date();   // TODO: calc from last event expiration
+        var traderCount = marketContract.getCurrentParticipantNumber.call(marketId);
+        var tradingPeriod = marketContract.getTradingPeriod.call(marketId);
+        var tradingFee = marketContract.getTradingFee.call(marketId);
+        var traderId =  marketContract.getParticipantNumber.call(marketId, account);
+        var totalVolume = 0;
+
+        var outcomeCount = marketContract.getMarketNumOutcomes.call(marketId).toNumber();
+        var outcomes = _.map( _.range(1, outcomeCount + 1), function (outcomeId) {
+
+          var volume = marketContract.getSharesPurchased.call(marketId, outcomeId);
+          //console.log(volume.toNumber());
+
+          //totalVolume += volume;
+
+          return {
+            id: outcomeId,
+            price: fromFixedPoint(marketContract.price.call(marketId, outcomeId)),
+            //sellPrice: marketContract.getSimulatedSell.call(marketId, id).toNumber(),
+            //buyPrice: marketContract.getSimulatedBuy.call(marketId, id).toNumber(),
+            priceHistory: [],  // NEED
+            sharesPurchased: fromFixedPoint(marketContract.getParticipantSharesPurchased.call(marketId, traderId, outcomeId)),
+            volume: volume
+          };
+        });
+
+        var price = outcomes.length ? outcomes[0].price : '-';
+        var winningOutcomes = marketContract.getWinningOutcomes.call(marketId);
+        console.log('Got market ' + marketId);
+
+        return {
+          id: marketId,
+          price: price,  // HACK
+          description: description,
+          alpha: alpha,
+          author: author,
+          endDate: endDate,
+          traderCount: traderCount,
+          tradingPeriod: tradingPeriod,
+          tradingFee: tradingFee,
+          traderId: traderId,
+          totalVolume: totalVolume,
+          events: events,
+          outcomes: outcomes,
+          comments: []
+        };
+      })
+    });
+
+    Promise.all(marketDataPromises).then(function (marketList) {
+      marketList = _.reject(marketList, function (x) { return x == null });
+      var markets = _.indexBy(marketList, 'id');
+      callback(markets);
+    });
   });
-
-  var markets = _.indexBy(marketList, 'id');
-
-  return markets;
 };
 
 EthereumClient.prototype.getEvents = function(branchId, expirationPeriod) {
